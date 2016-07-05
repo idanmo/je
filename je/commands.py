@@ -24,6 +24,8 @@ import argh
 from argh.decorators import arg
 from path import path
 
+import jinja2
+
 from je.jenkins import jenkins
 from je.cache import cache
 from je.configuration import configuration
@@ -93,7 +95,7 @@ def ls(job):
 @arg('builds',
      completer=completion.build_completer,
      nargs=argparse.ONE_OR_MORE)
-def report(job, builds, failed=False):
+def report(job, builds, failed=False, html_output_file=None):
     builds = _fetch_builds(job, builds)
     num_builds = len(builds)
     for index, (build_number, build) in enumerate(builds):
@@ -102,6 +104,64 @@ def report(job, builds, failed=False):
         _build_report(job, build, build_number, failed)
         if index < num_builds - 1:
             print
+
+    if html_output_file:
+        if num_builds > 1:
+            print 'Cannot generate an HTML report for multiple builds.'
+        else:
+            (build_number, build) = builds[0]
+            html = _build_html_report(job, build, build_number)
+            with open(html_output_file, 'w') as f:
+                f.write(html)
+
+
+def _build_html_report(job, build, build_number):
+    report = build['test_report']
+    build = build['build']
+    if build.get('building'):
+        return 'Building is currently running'
+    if report.get('status') == 'error':
+        return 'No tests report has been generated for this build'
+
+    # set case colors
+    for suite in report['suites']:
+        has_passed = True
+        for case in suite['cases']:
+            test_status = case['status']
+            if test_status in ['FAILED', 'REGRESSION']:
+                case['color'] = 'red'
+                has_passed = False
+            elif test_status in ['PASSED', 'FIXED']:
+                case['color'] = 'green'
+            elif test_status == 'SKIPPED':
+                case['color'] = 'yellow'
+                has_passed = False
+        suite['color'] = 'green' if has_passed else 'red'
+    html_template = """
+<html>
+    <body>
+        <h1>System Tests Report</h1>
+        <div>
+            <ul>
+                <li>Job name: <span style='font-weight: bold'>{{ job }}<span></li>
+                <li>Build number: <span style='font-weight: bold'>{{ build_number }}</span></li>
+            </ul>
+        {% for suite in report.suites %}
+            <h2 style='color: {{ suite.color }}'>{{ suite.name }}</h2>
+            <ul>
+            {% for case in suite.cases %}
+                <li style='color: {{ case.color }}'>{{ case.name }}</li>
+            {% endfor %}
+            </ul>
+        {% endfor %}
+        </div>
+    </body>
+</html>
+"""
+    template = jinja2.Template(html_template)
+    result = template.render(report=report, build=build, job=job,
+                             build_number=build_number)
+    return result
 
 
 def _build_report(job, build, build_number, failed):
@@ -193,7 +253,8 @@ def _build_report(job, build, build_number, failed):
 @arg('builds',
      completer=completion.build_completer,
      nargs=argparse.ONE_OR_MORE)
-def analyze(job, builds, passed_at_least_once=False, failed=False):
+def analyze(job, builds, passed_at_least_once=False, failed=False,
+            html_output_file=None):
     builds = _fetch_builds(job, builds)
     report = {}
     for build_number, build in builds:
@@ -225,6 +286,9 @@ def analyze(job, builds, passed_at_least_once=False, failed=False):
                 report_case[test_status] = report_case_status
                 report_suite[case_name] = report_case
             report[suite_name] = report_suite
+
+    suites = []
+
     for suite_name, suite in report.items():
         cases = []
         suite_has_passed = False
@@ -261,6 +325,10 @@ def analyze(job, builds, passed_at_least_once=False, failed=False):
             print suite_name_color(colors.bold('-' * (len(suite_name))))
             print '\n'.join(cases)
             print
+        suites.append({
+            'name': suite_name,
+            'cases': cases
+        })
 
 
 @command

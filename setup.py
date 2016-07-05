@@ -31,7 +31,8 @@ setup(
         'requests',
         'path.py',
         'argh',
-        'pyyaml'
+        'pyyaml',
+        'jinja2'
     ],
     entry_points={
         'console_scripts': [
